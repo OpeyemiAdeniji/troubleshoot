@@ -304,37 +304,48 @@ jobs:
           # Parse the videos array
           videos_data=$(echo "${{ needs.fetch_videos.outputs.videos_array }}" | jq -r .)
           
+          # Process each video  
+          videos_data=$(echo "${{ needs.fetch_videos.outputs.videos_array }}" | jq -r .)
+          
+          # Validate videos_data
+          if ! echo "$videos_data" | jq empty; then
+            echo "Invalid JSON in videos_array"
+            exit 1
+          fi
+          
+          PORT_RUN_ID=$(echo "${{ inputs.port_context }}" | jq -r '.runId')
+          
           # Process each video
           echo "$videos_data" | jq -c '.[]' | while read -r video; do
-            # Push to Port
+            if [[ -z "$video" ]]; then
+              echo "Empty or invalid video data"
+              exit 1
+            fi
+          
             response=$(curl -s -w "%{http_code}" -X POST "https://api.getport.io/v1/blueprints/video/entities?upsert=true" \
               -H "Authorization: Bearer $ACCESS_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$video")
-            
+          
             status_code=${response: -3}
             response_body=${response%???}
-            
+          
             if [[ "$status_code" != "200" && "$status_code" != "201" ]]; then
               echo "Failed to push video to Port. Status code: $status_code"
               echo "Response body: $response_body"
-
-              # Extract Port Run ID
-            PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
-            echo "Port Run ID: $PORT_RUN_ID"
-            
-            curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $ACCESS_TOKEN" \
-              -d '{
-                "message": "Failed to push video to Port. Status code: $status_code",
-                "terminationStatus": "FAILURE",
-                "statusLabel": "Step finished"
-              }'
+              
+              curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -d '{
+                  "message": "Failed to push video to Port. Status code: '"$status_code"'",
+                  "terminationStatus": "FAILURE",
+                  "statusLabel": "Step finished"
+                }'
               
               exit 1
             fi
-            
+          
             echo "Successfully pushed video to Port"
             curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
               -H "Content-Type: application/json" \
@@ -344,6 +355,7 @@ jobs:
                 "terminationStatus": "SUCCESS",
                 "statusLabel": "Step finished"
               }'
-            # Add small delay to prevent rate limiting
+            
+            # Prevent rate limiting
             sleep 1
           done
