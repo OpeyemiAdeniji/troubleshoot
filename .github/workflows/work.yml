@@ -116,7 +116,7 @@ jobs:
           
           # Convert newline-separated IDs to JSON array and set as output
           json_ids=$(echo "$video_ids" | jq -R -s 'split("\n") | map(select(length > 0))')
-          echo "ids=$json_ids" >> $GITHUB_OUTPUT
+          printf "ids=%s\n" "$json_ids" >> $GITHUB_OUTPUT
 
   process_videos:
     runs-on: ubuntu-latest
