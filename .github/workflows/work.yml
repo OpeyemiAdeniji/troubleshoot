@@ -88,11 +88,11 @@ jobs:
       - name: Get Video IDs from Playlist
         id: get_videos
         run: |
-          # Create a temporary file to store video IDs
+          # Create a temporary file to store video IDs as a proper JSON array
           video_ids_file=$(mktemp)
           
-          # Initialize an empty array for video IDs
-          echo "[]" > "$video_ids_file"
+          # Initialize an empty array in the file
+          echo '[]' > "$video_ids_file"
           
           next_page_token=""
           while :; do
@@ -107,10 +107,11 @@ jobs:
               exit 1
             fi
             
-            # Update the JSON array with new video IDs
-            video_ids=$(echo "$response" | jq -r '.items[].snippet.resourceId.videoId')
-            current_array=$(cat "$video_ids_file")
-            echo "$current_array" | jq --arg ids "$video_ids" '. + ($ids | split("\n") | select(length > 0))' > "$video_ids_file"
+            # Extract video IDs and merge them with existing array
+            echo "$response" | jq -r '.items[].snippet.resourceId.videoId' | while read -r video_id; do
+              current_json=$(cat "$video_ids_file")
+              echo "$current_json" | jq --arg vid "$video_id" '. + [$vid]' > "$video_ids_file"
+            done
             
             next_page_token=$(echo "$response" | jq -r '.nextPageToken // empty')
             if [ -z "$next_page_token" ]; then
@@ -118,12 +119,12 @@ jobs:
             fi
           done
           
-          # Set the JSON array as output
-          echo "ids=$(cat "$video_ids_file")" >> $GITHUB_OUTPUT
+          # Set the properly formatted JSON array as output
+          echo "ids=$(cat $video_ids_file)" >> "$GITHUB_OUTPUT"
           
           # Cleanup
           rm "$video_ids_file"
-
+          
   process_videos:
     runs-on: ubuntu-latest
     needs: [fetch_playlist_items, create_playlist_entity]
