@@ -88,10 +88,13 @@ jobs:
       - name: Get Video IDs from Playlist
         id: get_videos
         run: |
-          # Initialize array for video IDs
-          video_ids=()
-          next_page_token=""
+          # Create a temporary file to store video IDs
+          video_ids_file=$(mktemp)
           
+          # Initialize an empty array for video IDs
+          echo "[]" > "$video_ids_file"
+          
+          next_page_token=""
           while :; do
             echo "Fetching playlist page${next_page_token:+ with token $next_page_token}..."
             
@@ -104,23 +107,22 @@ jobs:
               exit 1
             fi
             
-            # Extract video IDs and add to array
-            while read -r video_id; do
-              if [ ! -z "$video_id" ]; then
-                video_ids+=("$video_id")
-              fi
-            done < <(echo "$response" | jq -r '.items[].snippet.resourceId.videoId')
+            # Update the JSON array with new video IDs
+            video_ids=$(echo "$response" | jq -r '.items[].snippet.resourceId.videoId')
+            current_array=$(cat "$video_ids_file")
+            echo "$current_array" | jq --arg ids "$video_ids" '. + ($ids | split("\n") | select(length > 0))' > "$video_ids_file"
             
             next_page_token=$(echo "$response" | jq -r '.nextPageToken // empty')
-            
             if [ -z "$next_page_token" ]; then
               break
             fi
           done
           
-          # Convert array to JSON and save as output
-          json_ids=$(printf '%s\n' "${video_ids[@]}" | jq -R . | jq -s .)
-          echo "ids=$json_ids" >> $GITHUB_OUTPUT
+          # Set the JSON array as output
+          echo "ids=$(cat "$video_ids_file")" >> $GITHUB_OUTPUT
+          
+          # Cleanup
+          rm "$video_ids_file"
 
   process_videos:
     runs-on: ubuntu-latest
@@ -139,9 +141,11 @@ jobs:
             -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
           ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
           
-          # Process each video ID
-          video_ids='${{ needs.fetch_playlist_items.outputs.video_ids }}'
-          echo "$video_ids" | jq -r '.[]' | while read -r video_id; do
+          # Parse video IDs from input and ensure it's valid JSON
+          echo '${{ needs.fetch_playlist_items.outputs.video_ids }}' | jq -r '.[]?' | while read -r video_id; do
+            # Skip empty lines
+            [ -z "$video_id" ] && continue
+            
             echo "Processing video ID: $video_id"
             
             video_details=$(curl -s "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=$video_id&key=${YOUTUBE_API_KEY}")
