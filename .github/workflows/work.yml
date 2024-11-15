@@ -32,16 +32,19 @@ jobs:
           PORT_CLIENT_ID=$(echo "$PORT_CLIENT_ID" | xargs)
           PORT_CLIENT_SECRET=$(echo "$PORT_CLIENT_SECRET" | xargs)
 
-          # Log API response for debugging
           response=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
             -H "Content-Type: application/json" \
             -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
           echo "API Response: $response"
 
-          # Extract and format the access token
           ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken' | tr -d '\n' | xargs)
 
-          # Log part of the access token for verification
+          if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" == "null" ]; then
+            echo "Failed to generate a valid access token. Exiting."
+            exit 1
+          fi
+
+          # Log part of the token to ensure it's set correctly (partial log for security)
           echo "Access Token starts with: ${ACCESS_TOKEN:0:5}..."
 
           # Set output
