@@ -80,7 +80,7 @@ jobs:
               "terminationStatus": "SUCCESS",
               "statusLabel": "Setup Complete"
             }'
-            
+
 
   fetch_playlist_metadata:
     runs-on: ubuntu-latest
@@ -168,7 +168,7 @@ jobs:
 
       - name: Push Playlist Data to Port
         run: |
-          playlist_entity='${{ needs.fetch_playlist_metadata.outputs.PLAYLIST_DATA }}'
+          playlist_entity="${{ needs.fetch_playlist_metadata.outputs.PLAYLIST_DATA }}"
           
           response=$(curl -s -w "%{http_code}" -X POST "https://api.getport.io/v1/blueprints/playlist/entities?upsert=true" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -241,15 +241,17 @@ jobs:
                 }
               }')
 
-              # Add video entity to the videos array
+              # Add video to videos array
               videos_array=$(echo "$videos_array" | jq --argjson new_video "$video_json" '. += [$new_video]')
             done
-            
+
+            # Check for pagination
             next_page_token=$(echo "$playlist_response" | jq -r '.nextPageToken // empty')
             [ -z "$next_page_token" ] && break
           done
           
-          echo "videos_array=$(echo $videos_array | jq -c .)" >> $GITHUB_OUTPUT
+          # Output videos array
+          echo "videos_array=$videos_array" >> $GITHUB_OUTPUT
 
   push_videos_to_port:
     runs-on: ubuntu-latest
@@ -257,11 +259,23 @@ jobs:
     env:
       PORT_CLIENT_ID: ${{ secrets.PORT_CLIENT_ID }}
       PORT_CLIENT_SECRET: ${{ secrets.PORT_CLIENT_SECRET }}
-      ACCESS_TOKEN: ${{ needs.fetch_videos.outputs.videos_array }}
     steps:
-      - name: Push Videos Data to Port
+      - name: Generate and Validate Access Token
+        id: token
         run: |
-          videos_data='${{ needs.fetch_videos.outputs.videos_array }}'
+          ACCESS_TOKEN=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "clientId": "'"$PORT_CLIENT_ID"'",
+              "clientSecret": "'"$PORT_CLIENT_SECRET"'"
+            }' | jq -r '.accessToken')
+          
+          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+
+      - name: Push Videos to Port
+        run: |
+          videos_data="${{ needs.fetch_videos.outputs.videos_array }}"
+          
           response=$(curl -s -w "%{http_code}" -X POST "https://api.getport.io/v1/blueprints/video/entities?upsert=true" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
