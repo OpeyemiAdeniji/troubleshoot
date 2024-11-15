@@ -76,7 +76,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$playlist_entity"
 
-  fetch_playlist_items:
+  fetch_video_ids:
     runs-on: ubuntu-latest
     needs: create_playlist_entity
     env:
@@ -85,14 +85,11 @@ jobs:
     outputs:
       video_ids: ${{ steps.get_videos.outputs.ids }}
     steps:
-      - name: Get Video IDs from Playlist
+      - name: Get Video IDs
         id: get_videos
         run: |
-          # Create a temporary file to store video IDs as a proper JSON array
-          video_ids_file=$(mktemp)
-          
-          # Initialize an empty array in the file
-          echo '[]' > "$video_ids_file"
+          # Initialize empty array for video IDs
+          video_ids=""
           
           next_page_token=""
           while :; do
@@ -107,11 +104,9 @@ jobs:
               exit 1
             fi
             
-            # Extract video IDs and merge them with existing array
-            echo "$response" | jq -r '.items[].snippet.resourceId.videoId' | while read -r video_id; do
-              current_json=$(cat "$video_ids_file")
-              echo "$current_json" | jq --arg vid "$video_id" '. + [$vid]' > "$video_ids_file"
-            done
+            # Extract and store video IDs
+            batch_ids=$(echo "$response" | jq -r '.items[].snippet.resourceId.videoId')
+            video_ids="${video_ids}${video_ids:+$'\n'}${batch_ids}"
             
             next_page_token=$(echo "$response" | jq -r '.nextPageToken // empty')
             if [ -z "$next_page_token" ]; then
@@ -119,15 +114,13 @@ jobs:
             fi
           done
           
-          # Set the properly formatted JSON array as output
-          echo "ids=$(cat $video_ids_file)" >> "$GITHUB_OUTPUT"
-          
-          # Cleanup
-          rm "$video_ids_file"
-          
+          # Convert newline-separated IDs to JSON array and set as output
+          json_ids=$(echo "$video_ids" | jq -R -s 'split("\n") | map(select(length > 0))')
+          echo "ids=$json_ids" >> $GITHUB_OUTPUT
+
   process_videos:
     runs-on: ubuntu-latest
-    needs: [fetch_playlist_items, create_playlist_entity]
+    needs: [fetch_video_ids, create_playlist_entity]
     env:
       PORT_CLIENT_ID: ${{ secrets.PORT_CLIENT_ID }}
       PORT_CLIENT_SECRET: ${{ secrets.PORT_CLIENT_SECRET }}
@@ -142,9 +135,8 @@ jobs:
             -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
           ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
           
-          # Parse video IDs from input and ensure it's valid JSON
-          echo '${{ needs.fetch_playlist_items.outputs.video_ids }}' | jq -r '.[]?' | while read -r video_id; do
-            # Skip empty lines
+          # Process each video ID
+          echo '${{ needs.fetch_video_ids.outputs.video_ids }}' | jq -r '.[]' | while read -r video_id; do
             [ -z "$video_id" ] && continue
             
             echo "Processing video ID: $video_id"
