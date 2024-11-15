@@ -241,14 +241,15 @@ jobs:
                 }
               }')
 
+              # Add video entity to the videos array
               videos_array=$(echo "$videos_array" | jq --argjson new_video "$video_json" '. += [$new_video]')
             done
-
+            
             next_page_token=$(echo "$playlist_response" | jq -r '.nextPageToken // empty')
             [ -z "$next_page_token" ] && break
           done
-
-          echo "videos_array=$videos_array" >> $GITHUB_OUTPUT
+          
+          echo "videos_array=$(echo $videos_array | jq -c .)" >> $GITHUB_OUTPUT
 
   push_videos_to_port:
     runs-on: ubuntu-latest
@@ -256,38 +257,17 @@ jobs:
     env:
       PORT_CLIENT_ID: ${{ secrets.PORT_CLIENT_ID }}
       PORT_CLIENT_SECRET: ${{ secrets.PORT_CLIENT_SECRET }}
+      ACCESS_TOKEN: ${{ needs.fetch_videos.outputs.videos_array }}
     steps:
-      - name: Generate and Validate Access Token
-        id: token
+      - name: Push Videos Data to Port
         run: |
-          set -e
-          PORT_CLIENT_ID=$(echo "$PORT_CLIENT_ID" | xargs)
-          PORT_CLIENT_SECRET=$(echo "$PORT_CLIENT_SECRET" | xargs)
-
-          ACCESS_TOKEN=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
+          videos_data='${{ needs.fetch_videos.outputs.videos_array }}'
+          response=$(curl -s -w "%{http_code}" -X POST "https://api.getport.io/v1/blueprints/video/entities?upsert=true" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{
-              "clientId": "'"$PORT_CLIENT_ID"'",
-              "clientSecret": "'"$PORT_CLIENT_SECRET"'"
-            }' | jq -r '.accessToken')
+            -d "$videos_data")
           
-          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
-
-      - name: Push Videos to Port
-        run: |
-          videos_json='${{ needs.fetch_videos.outputs.videos_array }}'
-          
-          for video in $(echo "$videos_json" | jq -r '.[] | @base64'); do
-            video_json=$(echo "$video" | base64 --decode)
-            
-            # Push each video
-            response=$(curl -s -w "%{http_code}" -X POST "https://api.getport.io/v1/blueprints/video/entities?upsert=true" \
-              -H "Authorization: Bearer $ACCESS_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$video_json")
-            
-            if [[ "${response: -3}" != "200" && "${response: -3}" != "201" ]]; then
-              echo "Failed to push video to Port. Response: $response"
-              exit 1
-            fi
-          done
+          if [[ "${response: -3}" != "200" && "${response: -3}" != "201" ]]; then
+            echo "Failed to push videos to Port. Response: $response"
+            exit 1
+          fi
