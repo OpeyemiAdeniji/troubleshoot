@@ -32,11 +32,19 @@ jobs:
           PORT_CLIENT_ID=$(echo "$PORT_CLIENT_ID" | xargs)
           PORT_CLIENT_SECRET=$(echo "$PORT_CLIENT_SECRET" | xargs)
 
+          # Log API response for debugging
           response=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
             -H "Content-Type: application/json" \
             -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
-          ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
+          echo "API Response: $response"
 
+          # Extract and format the access token
+          ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken' | tr -d '\n' | xargs)
+
+          # Log part of the access token for verification
+          echo "Access Token starts with: ${ACCESS_TOKEN:0:5}..."
+
+          # Set output
           echo "::set-output name=access_token::$ACCESS_TOKEN"
 
   setup_environment:
@@ -143,8 +151,12 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$playlist_entity")
 
-          if [[ "${response: -3}" != "200" && "${response: -3}" != "201" ]]; then
-            echo "Failed to push playlist to Port. Response: $response"
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+            echo "Failed to push playlist to Port. HTTP code: $http_code"
+            echo "Response Body: $body"
             exit 1
           fi
 
