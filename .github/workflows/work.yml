@@ -30,8 +30,18 @@ jobs:
           response=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
             -H "Content-Type: application/json" \
             -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
+          
           ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
-          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
+          
+          # Validate token
+          if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+            echo "Failed to get valid access token"
+            exit 1
+          fi
+          
+          # Ensure token is properly formatted
+          FORMATTED_TOKEN=$(echo "$ACCESS_TOKEN" | tr -d '[:space:]')
+          echo "access_token=$FORMATTED_TOKEN" >> $GITHUB_OUTPUT
 
   fetch_playlist_metadata:
     needs: generate_token
@@ -49,9 +59,21 @@ jobs:
         run: |
           set -e
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
+          
+          # Test auth token before using
+          echo "Testing authorization..."
+          auth_test=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID")
+          
+          if [ "$auth_test" = "401" ]; then
+            echo "Authorization failed. Token may be invalid."
+            exit 1
+          fi
+          
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d '{
               "message": "Metadata fetch of playlist has commenced PLAYLIST_ID - '$PLAYLIST_ID'",
               "statusLabel": "Fetching Playlist"
@@ -88,7 +110,7 @@ jobs:
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d '{
               "message": "Successfully fetched playlist metadata PLAYLIST_ID - '$PLAYLIST_ID'",
               "statusLabel": "Playlist Fetched"
@@ -106,7 +128,7 @@ jobs:
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d '{
               "message": "ingesting playlist data to Port has commenced PLAYLIST_ID - '$PLAYLIST_ID'",
               "statusLabel": "ingesting Playlist to Port"
@@ -116,13 +138,19 @@ jobs:
         run: |
           playlist_entity='${{ needs.fetch_playlist_metadata.outputs.playlist_data }}'
           
-          response=$(curl -s -w "%{http_code}" -X POST "https://api.getport.io/v1/blueprints/playlist/entities?upsert=true" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+          # Add debug output
+          echo "Authorization header: Bearer ${ACCESS_TOKEN}"
+          
+          response=$(curl -v -X POST "https://api.getport.io/v1/blueprints/playlist/entities?upsert=true" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "$playlist_entity")
           
-          if [[ "${response: -3}" != "200" && "${response: -3}" != "201" ]]; then
-            echo "Failed to push playlist to Port. Response: $response"
+          # Print response for debugging
+          echo "Response: $response"
+          
+          if echo "$response" | grep -q "unauthorized"; then
+            echo "Authorization failed. Response: $response"
             exit 1
           fi
 
@@ -132,7 +160,7 @@ jobs:
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d '{
               "message": "Successfully ingested playlist data to Port PLAYLIST_ID - '$PLAYLIST_ID'",
               "statusLabel": "Playlist ingested"
@@ -145,15 +173,13 @@ jobs:
       YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
       PLAYLIST_ID: ${{ inputs.playlistid }}
       ACCESS_TOKEN: ${{ needs.generate_token.outputs.access_token }}
-    outputs:
-      videos_data: ${{ steps.collect_videos.outputs.videos_json }}
     steps:
       - name: Send Start Logs to Port
         run: |
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d '{
               "message": "Extraction and ingesting of video data from YouTube has commenced PLAYLIST_ID - '$PLAYLIST_ID'",
               "statusLabel": "Fetching and ingesting Videos"
@@ -170,7 +196,6 @@ jobs:
             url="https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${PLAYLIST_ID}&key=${YOUTUBE_API_KEY}${next_page_token:+&pageToken=$next_page_token}"
             response=$(curl -s "$url")
             
-            # Check for API errors
             if [ "$(echo "$response" | jq -r '.error.code // empty')" != "" ]; then
               echo "YouTube API Error: $(echo "$response" | jq -r '.error.message')"
               exit 1
@@ -184,7 +209,6 @@ jobs:
               
               video_details=$(curl -s "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=$video_id&key=${YOUTUBE_API_KEY}")
               
-              # Extract video details
               video_title=$(echo "$video_details" | jq -r '.items[0].snippet.title')
               video_description=$(echo "$video_details" | jq -r '.items[0].snippet.description')
               video_thumbnail=$(echo "$video_details" | jq -r '.items[0].snippet.thumbnails.default.url')
@@ -193,7 +217,6 @@ jobs:
               video_like_count=$(echo "$video_details" | jq -r '.items[0].statistics.likeCount // "0"')
               video_comment_count=$(echo "$video_details" | jq -r '.items[0].statistics.commentCount // "0"')
               
-              # Create video entity in Port
               video_entity=$(jq -n \
                 --arg id "$video_id" \
                 --arg title "$video_title" \
@@ -222,17 +245,13 @@ jobs:
                   }
                 }')
               
-              response=$(curl --http1.1 -s -w "\n%{http_code}" -X POST "https://api.getport.io/v1/blueprints/video/entities?upsert=true" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
+              response=$(curl -v -X POST "https://api.getport.io/v1/blueprints/video/entities?upsert=true" \
+                -H "Authorization: Bearer ${ACCESS_TOKEN}" \
                 -H "Content-Type: application/json" \
                 -d "$video_entity")
               
-              http_code=$(echo "$response" | tail -n1)
-              body=$(echo "$response" | sed '$d')
-              
-              if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
-                echo "Failed to push video to Port. HTTP code: $http_code"
-                echo "Response Body: $body"
+              if echo "$response" | grep -q "unauthorized"; then
+                echo "Authorization failed for video $video_id. Response: $response"
                 continue
               fi
               
@@ -251,7 +270,7 @@ jobs:
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d '{
               "message": "Successfully fetched and ingested all videos PLAYLIST_ID - '$PLAYLIST_ID'",
               "statusLabel": "Videos Fetched and ingested"
@@ -271,7 +290,7 @@ jobs:
           
           curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -d "{
               \"message\": \"$MESSAGE\",
               \"statusLabel\": \"$STATUS_LABEL\"
