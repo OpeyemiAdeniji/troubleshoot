@@ -56,14 +56,6 @@ jobs:
     env:
       ACCESS_TOKEN: ${{ needs.generate_access_token.outputs.access_token }}
     steps:
-      - name: Verify Access Token
-        run: |
-          if [ -z "$ACCESS_TOKEN" ]; then
-            echo "Access token is empty. Exiting."
-            exit 1
-          fi
-          echo "Access Token starts with: ${ACCESS_TOKEN:0:5}..."
-
       - name: Send Setup Logs to Port
         run: |
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
@@ -86,14 +78,6 @@ jobs:
       playlist_id: ${{ steps.fetch_metadata.outputs.PLAYLIST_ID }}
       playlist_data: ${{ steps.fetch_metadata.outputs.PLAYLIST_DATA }}
     steps:
-      - name: Verify Access Token
-        run: |
-          if [ -z "$ACCESS_TOKEN" ]; then
-            echo "Access token is empty. Exiting."
-            exit 1
-          fi
-          echo "Access Token starts with: ${ACCESS_TOKEN:0:5}..."
-
       - name: Send Start Logs to Port
         id: start_log
         run: |
@@ -150,13 +134,16 @@ jobs:
       ACCESS_TOKEN: ${{ needs.generate_access_token.outputs.access_token }}
       PLAYLIST_ID: ${{ inputs.playlistid }}
     steps:
-      - name: Verify Access Token
+      - name: Send Start Logs to Port
         run: |
-          if [ -z "$ACCESS_TOKEN" ]; then
-            echo "Access token is empty. Exiting."
-            exit 1
-          fi
-          echo "Access Token starts with: ${ACCESS_TOKEN:0:5}..."
+          PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
+          curl -L "https://api.getport.io/v1/actions/runs/$PORT_RUN_ID/logs" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -d '{
+              "message": "Ingesting playlist data to Port has commenced PLAYLIST_ID - '"${PLAYLIST_ID}"'",
+              "statusLabel": "Ingesting Playlist to Port"
+            }'
 
       - name: Push Playlist Data to Port
         run: |
@@ -196,14 +183,6 @@ jobs:
       YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
       PLAYLIST_ID: ${{ inputs.playlistid }}
     steps:
-      - name: Verify Access Token
-        run: |
-          if [ -z "$ACCESS_TOKEN" ]; then
-            echo "Access token is empty. Exiting."
-            exit 1
-          fi
-          echo "Access Token starts with: ${ACCESS_TOKEN:0:5}..."
-
       - name: Send Start Logs to Port
         run: |
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
