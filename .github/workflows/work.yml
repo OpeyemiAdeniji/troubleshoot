@@ -15,17 +15,13 @@ env:
   PORT_CLIENT_SECRET: ${{ secrets.PORT_CLIENT_SECRET }}
 
 jobs:
-  fetch_playlist_metadata:
+  generate_token:
     runs-on: ubuntu-latest
-    env:
-      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-      PLAYLIST_ID: ${{ inputs.playlistid }}
     outputs:
-      playlist_id: ${{ steps.fetch_metadata.outputs.PLAYLIST_ID }}
-      playlist_data: ${{ steps.fetch_metadata.outputs.PLAYLIST_DATA }}
+      access_token: ${{ steps.get_token.outputs.access_token }}
     steps:
       - name: Generate Access Token
-        id: generate_token
+        id: get_token
         run: |
           set -e
           PORT_CLIENT_ID=$(echo "$PORT_CLIENT_ID" | xargs)
@@ -35,8 +31,19 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
           ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
-          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
 
+  fetch_playlist_metadata:
+    needs: generate_token
+    runs-on: ubuntu-latest
+    env:
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      PLAYLIST_ID: ${{ inputs.playlistid }}
+      ACCESS_TOKEN: ${{ needs.generate_token.outputs.access_token }}
+    outputs:
+      playlist_id: ${{ steps.fetch_metadata.outputs.PLAYLIST_ID }}
+      playlist_data: ${{ steps.fetch_metadata.outputs.PLAYLIST_DATA }}
+    steps:
       - name: Send Start Logs to Port
         id: start_log
         run: |
@@ -88,24 +95,12 @@ jobs:
             }'
 
   push_playlist_to_port:
-    needs: fetch_playlist_metadata
+    needs: [generate_token, fetch_playlist_metadata]
     runs-on: ubuntu-latest
     env:
       PLAYLIST_ID: ${{ inputs.playlistid }}
+      ACCESS_TOKEN: ${{ needs.generate_token.outputs.access_token }}
     steps:
-      - name: Generate Access Token
-        id: generate_token
-        run: |
-          set -e
-          PORT_CLIENT_ID=$(echo "$PORT_CLIENT_ID" | xargs)
-          PORT_CLIENT_SECRET=$(echo "$PORT_CLIENT_SECRET" | xargs)
-          
-          response=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
-            -H "Content-Type: application/json" \
-            -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
-          ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
-          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
-
       - name: Send Start Logs to Port
         run: |
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
@@ -144,27 +139,15 @@ jobs:
             }'
 
   fetch_and_ingest_videos:
-    needs: push_playlist_to_port
+    needs: [generate_token, push_playlist_to_port]
     runs-on: ubuntu-latest
     env:
       YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
       PLAYLIST_ID: ${{ inputs.playlistid }}
+      ACCESS_TOKEN: ${{ needs.generate_token.outputs.access_token }}
     outputs:
       videos_data: ${{ steps.collect_videos.outputs.videos_json }}
     steps:
-      - name: Generate Access Token
-        id: generate_token
-        run: |
-          set -e
-          PORT_CLIENT_ID=$(echo "$PORT_CLIENT_ID" | xargs)
-          PORT_CLIENT_SECRET=$(echo "$PORT_CLIENT_SECRET" | xargs)
-          
-          response=$(curl -s -X POST "https://api.getport.io/v1/auth/access_token" \
-            -H "Content-Type: application/json" \
-            -d "{\"clientId\": \"$PORT_CLIENT_ID\", \"clientSecret\": \"$PORT_CLIENT_SECRET\"}")
-          ACCESS_TOKEN=$(echo "$response" | jq -r '.accessToken')
-          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
-
       - name: Send Start Logs to Port
         run: |
           PORT_RUN_ID=$(echo '${{ inputs.port_context }}' | jq -r '.runId')
